@@ -1,4 +1,3 @@
-
 # .github/workflows/build.yml
 
 name: Build OpenWrt Package (using SDK)
@@ -13,19 +12,14 @@ on:
 # ==                        👇 User configuration area 👇                            ==
 # ======================================================================================
 env:
-  # 1. Set the name of the package you want to compile (it must be the same as your package directory name).
-  # For example: Luci-App-Adguardhome, V2ray-Core, KMOD-Wireguard, etc.
   # 1. 设置你要编译的软件包名称 (必须与你的软件包目录名相同)
   #    例如: luci-app-adguardhome, v2ray-core, kmod-wireguard 等
   PACKAGE_NAME: luci-app-argone-config
 
-  # 2. Set the version of OpenWrt to compile (it must be the official release label, such as' v23.05.3').
-  # Note: this method does not support' master' or' openwrt-23.05' and other branch names.
   # 2. 设置要编译的 OpenWrt 版本 (必须是官方的正式发布版标签, 例如 'v23.05.3')
   #    注意：此方法不支持 'master' 或 'openwrt-23.05' 等分支名
   OPENWRT_VERSION: 'v23.05.3'
 
-  # 3. Specify the SDK save directory, generally without modification.
   # 3. 指定SDK保存目录，一般不用修改
   SDK_DIR: /home/runner/work/openwrt-sdk
 # ======================================================================================
@@ -43,10 +37,13 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          # The compiled path is found here in https://downloads.openwrt.org/releases/24.10.3/targets, and the name is anything.
-          # 编译的path在https://downloads.openwrt.org/releases/24.10.3/targets 这里查找，name随意
+          # 编译的path在https://downloads.openwrt.org/releases/23.05.3/targets 这里查找，name随意
+          - name: x86_64
+            path: x86/64
           - name: mediatek_filogic
             path: mediatek/filogic
+          - name: mips_mt7621
+            path: ramips/mt7621
 
     steps:
       # 步骤 1: 检出代码
@@ -60,26 +57,20 @@ jobs:
           sudo apt-get install -y build-essential rsync unzip zstd
 
       # 步骤 3: 缓存 OpenWrt SDK
-      # 缓存已下载和初步设置好的 SDK 目录。
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v4
         with:
-          # 需要缓存的目录路径
           path: ${{ env.SDK_DIR }}
-          # 缓存键：结合操作系统、目标架构和 OpenWrt 版本，确保环境变化时缓存失效
           key: ${{ runner.os }}-sdk-${{ matrix.target.name }}-${{ env.OPENWRT_VERSION }}
 
       # 步骤 4: 准备 SDK (仅在缓存未命中时运行)
-      # 这个组合步骤包含了下载、解压 SDK 和更新 feeds，因为这些都是 SDK 准备过程的一部分，应该一起被缓存。
       - name: Download, extract OpenWrt SDK and update feeds
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          # 从环境变量中移除 'v' 前缀以匹配版本号
           release_version="${OPENWRT_VERSION#v}"
           sdk_url_prefix="https://downloads.openwrt.org/releases/${release_version}/targets/${{ matrix.target.path }}"
           
-          # 查找 SDK 文件名
           sdk_filename=$(curl -s "$sdk_url_prefix/" | \
                         grep -o '<a href="openwrt-sdk-.*-x86_64\.tar\.\(xz\|zst\)">' | \
                         sed -e 's/.*<a href="//' -e 's/">//' | \
@@ -96,7 +87,6 @@ jobs:
           wget -q "${sdk_url_prefix}/${sdk_filename}"
           
           echo "Extracting SDK..."
-          # 解压 SDK 并重命名为固定的目录名，以匹配缓存路径
           tar -xf "$sdk_filename"
           mv $(find . -maxdepth 1 -type d -name 'openwrt-sdk-*') ${{ env.SDK_DIR }}
 
@@ -106,15 +96,27 @@ jobs:
           ./scripts/feeds install -a
           cd ..
 
-      # 步骤 5: 准备构建配置
+      # 步骤 5: 准备构建配置（核心修复：先判断目录是否存在再清理）
       - name: Prepare build environment
         working-directory: ${{ env.SDK_DIR }}
         run: |
+          # 清理旧的软件包目录
           rm -rf package/${{ env.PACKAGE_NAME }}
+          # 复制新的软件包代码
           cp -r ${{ github.workspace }} ./package/
+          # 提取语言包名称（去掉 luci-app- 前缀）
           translation_pkg=${PACKAGE_NAME#luci-app-}
-          find ./bin/packages -type f -name "${PACKAGE_NAME}*.ipk" -delete -o -print
-          find ./bin/packages -type f -name "luci-i18n-${translation_pkg}-*.ipk" -delete -o -print
+          
+          # 关键修复：仅当 bin/packages 目录存在时，才执行清理旧产物
+          if [ -d "./bin/packages" ]; then
+            find ./bin/packages -type f -name "${PACKAGE_NAME}*.ipk" -delete
+            find ./bin/packages -type f -name "luci-i18n-${translation_pkg}-*.ipk" -delete
+            echo "Cleaned old IPK files in ./bin/packages/"
+          else
+            echo "./bin/packages directory does not exist, skip cleaning old IPK files"
+          fi
+          
+          # 生成编译配置文件
           {
             echo "CONFIG_PACKAGE_${PACKAGE_NAME}=m"
             echo "CONFIG_PACKAGE_luci-i18n-${translation_pkg}-zh-cn=m"
@@ -143,7 +145,6 @@ jobs:
           done
           if ! find upload -maxdepth 1 -type f -name '*.ipk' | grep -q '.'; then
             echo "::error::No IPK files found in ./bin/packages/"
-            # 显示编译输出目录树，方便调试
             echo "Directory tree of ./bin/:"
             ls -R ./bin/
             exit 1
