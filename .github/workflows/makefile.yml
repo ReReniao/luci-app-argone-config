@@ -1,0 +1,72 @@
+name: Compile LuCI App (Argone Config - ARMv8)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  compile-armv8:
+    runs-on: ubuntu-20.04
+    steps:
+      # 1. 拉取插件源码
+      - name: Checkout Plugin Source
+        uses: actions/checkout@v4
+        with:
+          path: luci-app-argone-config
+
+      # 2. 拉取 LEDE 兼容的 OpenWrt 源码（选择 23.05 分支，适配内核 6.6+ 和 ARMv8）
+      - name: Checkout OpenWrt Source (23.05)
+        uses: actions/checkout@v4
+        with:
+          repository: openwrt/openwrt
+          ref: openwrt-23.05  # 23.05 分支默认支持内核 6.1+，兼容 6.6 内核
+          path: openwrt
+          fetch-depth: 1
+
+      # 3. 安装编译依赖
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib gettext \
+            git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget
+
+      # 4. 配置编译环境 + 复制插件
+      - name: Configure OpenWrt Env
+        run: |
+          cd openwrt
+          # 更新 feeds（确保 luci-compat 等依赖存在）
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          # 复制插件到编译目录
+          cp -r ../luci-app-argone-config package/luci-app-argone-config
+
+      # 5. 指定 ARMv8 (armvirt-64) 架构 + 勾选插件
+      - name: Set ARMv8 Architecture & Select Plugin
+        run: |
+          cd openwrt
+          # 配置目标架构为 armvirt-64（适配 ARMv8 处理器）
+          echo "CONFIG_TARGET_armvirt=y" >> .config
+          echo "CONFIG_TARGET_armvirt_64=y" >> .config
+          echo "CONFIG_TARGET_armvirt_64_Default=y" >> .config
+          # 勾选插件和依赖
+          echo "CONFIG_PACKAGE_luci-app-argone-config=y" >> .config
+          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+          # 生成最终配置（自动处理依赖）
+          make oldconfig
+
+      # 6. 编译插件（适配 CI 资源，用 -j2 避免过载）
+      - name: Compile Plugin (ARMv8)
+        run: |
+          cd openwrt
+          make package/luci-app-argone-config/compile V=s -j2
+
+      # 7. 上传 ARMv8 架构的 .ipk 产物
+      - name: Upload ARMv8 IPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-argone-config-armv8-ipk
+          path: openwrt/bin/packages/armvirt-64/luci/luci-app-argone-config_*.ipk
+          retention-days: 30
