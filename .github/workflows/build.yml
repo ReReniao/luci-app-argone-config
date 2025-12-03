@@ -110,21 +110,22 @@ jobs:
           ./scripts/feeds install -a
           cd ..
 
-      # 步骤 5: 准备构建配置
-      - name: Prepare build environment
-        working-directory: ${{ env.SDK_DIR }}
-        run: |
-          rm -rf package/${{ env.PACKAGE_NAME }}
-          cp -r ${{ github.workspace }} ./package/
-          translation_pkg=${PACKAGE_NAME#luci-app-}
-          find ./bin/packages -type f -name "${PACKAGE_NAME}*.ipk" -delete
-          find ./bin/packages -type f -name "luci-i18n-${translation_pkg}-*.ipk" -delete
-          {
-            echo "CONFIG_PACKAGE_${PACKAGE_NAME}=m"
-            echo "CONFIG_PACKAGE_luci-i18n-${translation_pkg}-zh-cn=m"
-            echo "CONFIG_LUCI_LANG_zh_Hans=y"
-          } > .config
-          make defconfig
+  # 步骤 5: 准备构建配置
+- name: Prepare build environment
+  working-directory: ${{ env.SDK_DIR }}
+  run: |
+    rm -rf package/${{ env.PACKAGE_NAME }}
+    cp -r ${{ github.workspace }} ./package/
+    translation_pkg=${PACKAGE_NAME#luci-app-}
+    # 关键修复：添加 -o -print 避免目录不存在时报错
+    find ./bin/packages -type f -name "${PACKAGE_NAME}*.ipk" -delete -o -print
+    find ./bin/packages -type f -name "luci-i18n-${translation_pkg}-*.ipk" -delete -o -print
+    {
+      echo "CONFIG_PACKAGE_${PACKAGE_NAME}=m"
+      echo "CONFIG_PACKAGE_luci-i18n-${translation_pkg}-zh-cn=m"
+      echo "CONFIG_LUCI_LANG_zh_Hans=y"
+    } > .config
+    make defconfig
 
       # 步骤 6: 编译软件包
       - name: Compile the package
