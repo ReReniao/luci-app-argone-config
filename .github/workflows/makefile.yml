@@ -35,7 +35,7 @@ jobs:
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 50
           gcc --version
 
-      # 增加 4G 交换分区（工具链编译需大量内存）
+      # 增加 4G 交换分区（确保工具链编译内存充足）
       - name: Add 4G Swap Space
         run: |
           sudo fallocate -l 4G /swapfile
@@ -49,15 +49,18 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          # 复制插件到编译目录（确保插件结构正确）
           cp -r ../luci-app-argone-config package/luci-app-argone-config
+          # 验证插件是否复制成功
+          ls -la package/luci-app-argone-config  # 日志中确认插件文件存在
 
-      # 关键：写入 ARMv8 配置 + 先编译工具链（强制架构生效）
-      - name: Force ARMv8 Config & Build Toolchain
+      # 强制 ARMv8 配置 + 完整编译流程（工具链+插件）
+      - name: Force ARMv8 & Full Compile
         run: |
           cd openwrt
-          # 1. 彻底清空所有旧配置和编译产物
+          # 彻底清空旧产物
           rm -rf .config .config.old staging_dir/ build_dir/ bin/ tmp/
-          # 2. 写入纯 ARMv8 配置（无任何默认架构干扰）
+          # 写入 ARMv8 配置
           > .config
           cat << EOF >> .config
           CONFIG_TARGET=armvirt
@@ -65,36 +68,37 @@ jobs:
           CONFIG_TARGET_armvirt_64=y
           CONFIG_TARGET_armvirt_64_Default=y
           CONFIG_TARGET_armvirt_SUBTARGET="64"
-          # 必须依赖
+          # 勾选插件和依赖（提前勾选，避免后续遗漏）
+          CONFIG_PACKAGE_luci-app-argone-config=y
           CONFIG_PACKAGE_luci-compat=y
-          # 编译优化
-          CONFIG_DEBUG=n
-          CONFIG_OPTIMIZE_FOR_SIZE=y
-          CONFIG_EXTRA_CFLAGS="-Os"
-          # 工具链编译必要配置
+          # 编译必要配置
           CONFIG_DEVEL=y
           CONFIG_TOOLCHAIN=y
-          CONFIG_TOOLCHAIN_BUILD=y
+          CONFIG_BUILD_ALL_PACKAGES=n  # 只编译勾选的插件，加快速度
+          CONFIG_OPTIMIZE_FOR_SIZE=y
+          CONFIG_DEBUG=n
           EOF
-          # 3. 生成工具链配置
+          # 生成配置
           make oldconfig
-          # 4. 先单独编译 ARMv8 工具链（强制架构锁定）
-          make toolchain/compile V=s -j1
-
-      # 编译插件（基于已生成的 ARMv8 工具链）
-      - name: Compile Plugin (ARMv8 Toolchain)
-        run: |
-          cd openwrt
-          # 勾选插件
-          echo "CONFIG_PACKAGE_luci-app-argone-config=y" >> .config
-          make oldconfig
-          # 编译插件
+          # 完整编译（先工具链，后插件，确保产物生成）
           make package/luci-app-argone-config/compile V=s -j1
 
-      # 上传最终产物
+      # 关键：查看产物路径，适配实际生成位置
+      - name: Check IPK Path
+        run: |
+          cd openwrt
+          # 查找所有生成的 .ipk 文件，日志中确认路径
+          find bin/ -name "luci-app-argone-config_*.ipk" -print
+          # 列出可能的产物目录
+          ls -la bin/packages/armvirt-64/  # 查看 armvirt-64 下的所有子目录
+          ls -la bin/packages/armvirt-64/luci/  # 确认 luci 目录是否存在
+
+      # 上传产物（适配实际路径，若路径不同可修改）
       - name: Upload ARMv8 IPK
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-argone-config-armv8-ipk
-          path: openwrt/bin/packages/armvirt-64/luci/luci-app-argone-config_*.ipk
+          path: |
+            openwrt/bin/packages/armvirt-64/**/luci-app-argone-config_*.ipk
+            openwrt/bin/packages/armvirt-64/luci/luci-app-argone-config_*.ipk
           retention-days: 30
