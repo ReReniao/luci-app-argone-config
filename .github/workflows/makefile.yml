@@ -20,19 +20,20 @@ jobs:
           repository: openwrt/openwrt
           ref: openwrt-23.05
           path: openwrt
-          fetch-depth: 0  # 拉取完整源码，避免配置文件缺失
+          fetch-depth: 0  # 拉取完整源码
           submodules: true
 
+      # 修复：删除 python3-distutils，Ubuntu 22.04 已内置
       - name: Install Full Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang flex bison g++-9 gcc-9 gawk gcc-multilib gettext \
             git libncurses5-dev libncursesw5-dev libssl-dev python3 rsync unzip zlib1g-dev file wget libdeflate-dev \
-            python3-distutils python3-setuptools
+            python3-setuptools  # 保留必要依赖，删除 python3-distutils
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 50
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 50
 
-      - name: Add 6G Swap Space (Critical for Toolchain)
+      - name: Add 6G Swap Space
         run: |
           sudo fallocate -l 6G /swapfile
           sudo chmod 600 /swapfile
@@ -40,13 +41,11 @@ jobs:
           sudo swapon /swapfile
           swapon --show
 
-      - name: Patch OpenWrt to Force ARMv8 (Bypass Default Arch)
+      - name: Patch OpenWrt to Force ARMv8
         run: |
           cd openwrt
-          # 补丁：修改 target 检测逻辑，强制默认架构为 armvirt-64
           echo -e '#!/bin/bash\necho "armvirt"\necho "64"' > scripts/get_default_target.sh
           chmod +x scripts/get_default_target.sh
-          # 更新 feeds 并安装依赖
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           cp -r ../luci-app-argone-config package/luci-app-argone-config
@@ -54,9 +53,7 @@ jobs:
       - name: Lock ARMv8 Config & Build
         run: |
           cd openwrt
-          # 彻底清空旧配置
           rm -rf .config .config.old staging_dir/ build_dir/ bin/
-          # 写入强制 ARMv8 配置
           cat > .config << EOF
           CONFIG_TARGET=armvirt
           CONFIG_TARGET_armvirt=y
@@ -68,16 +65,13 @@ jobs:
           CONFIG_OPTIMIZE_FOR_SIZE=y
           CONFIG_DEBUG=n
           EOF
-          # 生成配置并编译
           make defconfig
           make package/luci-app-argone-config/compile V=s -j1
 
       - name: Locate & Upload IPK
         run: |
           cd openwrt
-          # 全局查找生成的 ipk 文件
           find . -name "luci-app-argone-config_*.ipk" -exec cp {} ../ \;
-        working-directory: .
 
       - name: Upload Final IPK
         uses: actions/upload-artifact@v4
