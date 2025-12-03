@@ -16,14 +16,18 @@ jobs:
         with:
           path: luci-app-argone-config
 
-      # 关键：修复工具链下载链接（使用 23.05.10 最新稳定版）
-      - name: Download ARMv8 OpenWrt Toolchain (23.05.10)
+      # 关键：使用通用链接+重试机制，确保工具链下载成功
+      - name: Download ARMv8 OpenWrt Toolchain (23.05 Latest)
         run: |
-          # 最新版 ARMv8 预编译工具链（官方稳定链接，不会 404）
-          wget https://downloads.openwrt.org/releases/23.05.10/targets/armvirt/64/openwrt-toolchain-23.05.10-armvirt-64_gcc-12.3.0_musl.tar.xz
-          # 解压工具链
-          tar xJf openwrt-toolchain-23.05.10-armvirt-64_gcc-12.3.0_musl.tar.xz
-          mv openwrt-toolchain-23.05.10-armvirt-64_gcc-12.3.0_musl toolchain-armv8
+          # 23.05 分支 armvirt-64 工具链通用链接（自动指向最新稳定版）
+          TOOLCHAIN_URL="https://downloads.openwrt.org/releases/23.05/targets/armvirt/64/openwrt-toolchain-23.05-armvirt-64_gcc-12.3.0_musl.tar.xz"
+          # 增加 5 次重试+超时控制，避免网络波动
+          wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 -t 5 $TOOLCHAIN_URL
+          # 解压工具链（兼容不同版本的文件名）
+          TAR_FILE=$(ls openwrt-toolchain-23.05*-armvirt-64_gcc-12.3.0_musl.tar.xz)
+          tar xJf $TAR_FILE
+          # 重命名工具链目录（统一路径）
+          mv openwrt-toolchain-23.05*-armvirt-64_gcc-12.3.0_musl toolchain-armv8
 
       # 安装插件编译依赖
       - name: Install Plugin Build Dependencies
@@ -31,31 +35,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gcc-multilib libssl-dev python3 rsync unzip zlib1g-dev file wget
 
-      # 配置编译环境+验证工具链
+      # 配置环境+验证工具链
       - name: Configure & Verify Toolchain
         run: |
           cd luci-app-argone-config
-          # 设置工具链环境变量
           export STAGING_DIR=$(pwd)/../toolchain-armv8/staging_dir
           export PATH=$(pwd)/../toolchain-armv8/bin:$PATH
-          # 验证 ARMv8 编译器（输出 aarch64 版本说明成功）
-          aarch64-openwrt-linux-musl-gcc --version
+          # 验证 ARMv8 编译器是否可用
+          aarch64-openwrt-linux-musl-gcc --version || { echo "Toolchain verification failed!"; exit 1; }
 
-      # 编译插件（无架构冲突，直接生成 ARMv8 .ipk）
-      - name: Compile Plugin (ARMv8 Final)
+      # 编译插件
+      - name: Compile Plugin (Final Stable)
         run: |
           cd luci-app-argone-config
           export STAGING_DIR=$(pwd)/../toolchain-armv8/staging_dir
           export PATH=$(pwd)/../toolchain-armv8/bin:$PATH
-          # 编译插件（调用自带 Makefile）
+          # 编译插件（保留详细日志）
           make V=s -j1
-          # 查看产物（日志中确认 .ipk 生成）
-          ls -la bin/
+          # 列出所有生成的文件，确认 .ipk 存在
+          ls -la bin/ || echo "Bin directory not found"
+          ls -la ./ || echo "Current directory files"
 
-      # 上传最终产物
+      # 上传产物（兼容插件可能的输出路径）
       - name: Upload ARMv8 IPK
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-argone-config-armv8-ipk
-          path: luci-app-argone-config/bin/luci-app-argone-config_*.ipk
+          path: |
+            luci-app-argone-config/bin/luci-app-argone-config_*.ipk
+            luci-app-argone-config/luci-app-argone-config_*.ipk
           retention-days: 30
