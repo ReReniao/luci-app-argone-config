@@ -20,16 +20,15 @@ jobs:
           repository: openwrt/openwrt
           ref: openwrt-23.05
           path: openwrt
-          fetch-depth: 0  # 拉取完整源码
+          fetch-depth: 0
           submodules: true
 
-      # 修复：删除 python3-distutils，Ubuntu 22.04 已内置
       - name: Install Full Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang flex bison g++-9 gcc-9 gawk gcc-multilib gettext \
             git libncurses5-dev libncursesw5-dev libssl-dev python3 rsync unzip zlib1g-dev file wget libdeflate-dev \
-            python3-setuptools  # 保留必要依赖，删除 python3-distutils
+            python3-setuptools
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 50
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 50
 
@@ -41,39 +40,39 @@ jobs:
           sudo swapon /swapfile
           swapon --show
 
-      - name: Patch OpenWrt to Force ARMv8
+      - name: Force ARMv8 Config (No Defconfig)
         run: |
           cd openwrt
-          echo -e '#!/bin/bash\necho "armvirt"\necho "64"' > scripts/get_default_target.sh
-          chmod +x scripts/get_default_target.sh
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          cp -r ../luci-app-argone-config package/luci-app-argone-config
+          # 1. 彻底删除默认 MIPS 架构配置文件（关键！）
+          rm -rf target/linux/ath79/generic/config-default
+          # 2. 复制 ARMv8 官方配置文件作为基础（无任何 MIPS 干扰）
+          cp target/linux/armvirt/64/config-5.15 .config
+          # 3. 勾选插件和依赖
+          echo "CONFIG_PACKAGE_luci-app-argone-config=y" >> .config
+          echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+          # 4. 编译优化配置
+          echo "CONFIG_DEBUG=n" >> .config
+          echo "CONFIG_OPTIMIZE_FOR_SIZE=y" >> .config
+          # 5. 直接生成依赖配置，跳过 defconfig（避免覆盖）
+          make oldconfig
+          # 6. 验证架构配置（日志中确认是 armvirt-64）
+          grep "CONFIG_TARGET" .config
 
-      - name: Lock ARMv8 Config & Build
+      - name: Build ARMv8 Toolchain & Plugin
         run: |
           cd openwrt
-          rm -rf .config .config.old staging_dir/ build_dir/ bin/
-          cat > .config << EOF
-          CONFIG_TARGET=armvirt
-          CONFIG_TARGET_armvirt=y
-          CONFIG_TARGET_armvirt_64=y
-          CONFIG_TARGET_armvirt_64_Default=y
-          CONFIG_PACKAGE_luci-app-argone-config=y
-          CONFIG_PACKAGE_luci-compat=y
-          CONFIG_DEVEL=y
-          CONFIG_OPTIMIZE_FOR_SIZE=y
-          CONFIG_DEBUG=n
-          EOF
-          make defconfig
+          # 先编译工具链，再编译插件
+          make toolchain/compile V=s -j1
           make package/luci-app-argone-config/compile V=s -j1
 
-      - name: Locate & Upload IPK
+      - name: Locate & Copy IPK
         run: |
           cd openwrt
-          find . -name "luci-app-argone-config_*.ipk" -exec cp {} ../ \;
+          # 全局查找 ARMv8 架构的 .ipk
+          find bin/packages/armvirt-64/ -name "luci-app-argone-config_*.ipk" -exec cp {} ../ \;
+          ls -la ../  # 确认 .ipk 已复制
 
-      - name: Upload Final IPK
+      - name: Upload Final ARMv8 IPK
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-argone-config-armv8-ipk
