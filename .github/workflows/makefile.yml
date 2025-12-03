@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 10
           submodules: false
 
-      # 安装完整依赖（含 config 工具依赖）
+      # 安装完整依赖
       - name: Install Full Dependencies & GCC-9
         run: |
           sudo apt-get update
@@ -35,7 +35,7 @@ jobs:
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 50
           gcc --version
 
-      # 增加交换分区（解决内存不足）
+      # 增加交换分区
       - name: Add Swap Space
         run: |
           sudo fallocate -l 2G /swapfile
@@ -47,44 +47,40 @@ jobs:
       - name: Configure OpenWrt Env & Copy Plugin
         run: |
           cd openwrt
-          # 更新 feeds 并安装依赖
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          # 复制插件到编译目录
           cp -r ../luci-app-argone-config package/luci-app-argone-config
-          # 编译 config 命令行工具（用于非交互配置）
+          # 编译 config 工具
           make -C scripts/config conf
 
-      # 关键：用官方 config 工具非交互锁定 ARMv8 架构（无终端依赖）
+      # 关键：先加载默认配置，再用 config 工具锁定 ARMv8 架构（解决 Kconfig 缺失问题）
       - name: Lock ARMv8 (armvirt-64) via Config Tool
         run: |
           cd openwrt
-          # 1. 生成默认空配置
-          ./scripts/config/conf --defconfig=.config -w .config
-          # 2. 强制设置 Target System 为 armvirt
-          ./scripts/config/conf --set-str CONFIG_TARGET "armvirt" -w .config
-          # 3. 强制设置 Subtarget 为 64-bit
-          ./scripts/config/conf --set-str CONFIG_TARGET_armvirt_SUBTARGET "64" -w .config
-          # 4. 确认架构配置（避免遗漏）
-          ./scripts/config/conf --set-y CONFIG_TARGET_armvirt=y -w .config
-          ./scripts/config/conf --set-y CONFIG_TARGET_armvirt_64=y -w .config
-          ./scripts/config/conf --set-y CONFIG_TARGET_armvirt_64_Default=y -w .config
-          # 5. 勾选插件和依赖
-          ./scripts/config/conf --set-y CONFIG_PACKAGE_luci-app-argone-config=y -w .config
-          ./scripts/config/conf --set-y CONFIG_PACKAGE_luci-compat=y -w .config
-          # 6. 优化编译配置
-          ./scripts/config/conf --set-n CONFIG_DEBUG=y -w .config  # 关闭调试
-          ./scripts/config/conf --set-y CONFIG_OPTIMIZE_FOR_SIZE=y -w .config  # 尺寸优化
-          # 7. 自动处理所有依赖
+          # 1. 先加载 OpenWrt 主 Kconfig 生成基础配置（解决 Kconfig 文件缺失）
+          ./scripts/config/conf --alldefconfig Config.in -w .config
+          # 2. 强制设置 ARMv8 架构参数（覆盖默认架构）
+          ./scripts/config/conf --set-str CONFIG_TARGET "armvirt" Config.in -w .config
+          ./scripts/config/conf --set-str CONFIG_TARGET_armvirt_SUBTARGET "64" Config.in -w .config
+          ./scripts/config/conf --set-y CONFIG_TARGET_armvirt=y Config.in -w .config
+          ./scripts/config/conf --set-y CONFIG_TARGET_armvirt_64=y Config.in -w .config
+          ./scripts/config/conf --set-y CONFIG_TARGET_armvirt_64_Default=y Config.in -w .config
+          # 3. 勾选插件和依赖
+          ./scripts/config/conf --set-y CONFIG_PACKAGE_luci-app-argone-config=y Config.in -w .config
+          ./scripts/config/conf --set-y CONFIG_PACKAGE_luci-compat=y Config.in -w .config
+          # 4. 优化编译配置
+          ./scripts/config/conf --set-n CONFIG_DEBUG=y Config.in -w .config
+          ./scripts/config/conf --set-y CONFIG_OPTIMIZE_FOR_SIZE=y Config.in -w .config
+          # 5. 自动处理依赖并生成最终配置
           make oldconfig
 
-      # 编译插件（单线程稳定编译）
-      - name: Compile Plugin (Final ARMv8 Version)
+      # 编译插件（单线程稳定运行）
+      - name: Compile Plugin (Final Stable Version)
         run: |
           cd openwrt
           make package/luci-app-argone-config/compile V=s -j1
 
-      # 上传最终产物（ARMv8 专用 .ipk）
+      # 上传产物
       - name: Upload ARMv8 IPK
         uses: actions/upload-artifact@v4
         with:
