@@ -16,18 +16,17 @@ jobs:
         with:
           path: luci-app-argone-config
 
-      # 关键1：拉取 OpenWrt 23.05 源码（确保架构配置文件完整）
       - name: Checkout OpenWrt Source (23.05)
         uses: actions/checkout@v4
         with:
           repository: openwrt/openwrt
           ref: openwrt-23.05
           path: openwrt
-          fetch-depth: 10  # 拉取更多提交，确保架构配置文件不缺失
+          fetch-depth: 10
           submodules: false
 
-      # 安装依赖（兼容工具链+基础依赖）
-      - name: Install Compatible Dependencies & GCC-9
+      # 安装依赖（兼容+完整）
+      - name: Install Dependencies & GCC-9
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang flex bison g++-9 gcc-9 gawk gcc-multilib gettext \
@@ -36,7 +35,7 @@ jobs:
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-9 50
           gcc --version
 
-      # 关键2：增加交换分区（避免工具链编译内存不足）
+      # 增加交换分区
       - name: Add Swap Space
         run: |
           sudo fallocate -l 2G /swapfile
@@ -50,33 +49,34 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          # 复制插件到编译目录
           cp -r ../luci-app-argone-config package/luci-app-argone-config
+          # 安装 menuconfig 非交互配置工具
+          sudo apt-get install -y libncurses5-dev  # 确保 menuconfig 可用
 
-      # 关键3：直接加载 armvirt-64 架构的默认配置（彻底锁定架构）
-      - name: Force ARMv8 (armvirt-64) Architecture
+      # 关键：用非交互命令强制选择 armvirt-64 架构（无文件依赖）
+      - name: Force ARMv8 (armvirt-64) via Menuconfig
         run: |
           cd openwrt
-          # 1. 彻底清理所有旧配置（关键！避免残留）
-          rm -rf .config .config.old tmp/ staging_dir/ build_dir/
-          # 2. 直接加载 armvirt-64 架构的默认配置（不依赖 defconfig 覆盖）
-          cp target/linux/armvirt/64/config-5.15 .config  # 23.05 分支 armvirt-64 对应内核 5.15
-          # 3. 勾选插件和依赖（不修改架构相关配置）
+          # 1. 生成空配置
+          echo "" > .config
+          # 2. 非交互方式选择架构：Target System → armvirt → Subtarget → 64-bit
+          make menuconfig < <(echo -e "Target System\narmvirt\nSubtarget\n64-bit\nExit\nYes")
+          # 3. 勾选插件和依赖
           echo "CONFIG_PACKAGE_luci-app-argone-config=y" >> .config
           echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-          # 4. 优化编译配置（关闭调试、减小体积）
+          # 4. 优化配置
           echo "CONFIG_DEBUG=n" >> .config
           echo "CONFIG_OPTIMIZE_FOR_SIZE=y" >> .config
-          # 5. 生成最终配置（仅处理插件依赖，不改变架构）
+          # 5. 生成最终配置
           make oldconfig
 
-      # 编译插件（单线程，确保工具链稳定构建）
-      - name: Compile Plugin (ARMv8 Locked)
+      # 编译插件
+      - name: Compile Plugin (ARMv8 Stable)
         run: |
           cd openwrt
           make package/luci-app-argone-config/compile V=s -j1
 
-      # 上传产物（明确指定 ARMv8 架构路径）
+      # 上传产物
       - name: Upload ARMv8 IPK
         uses: actions/upload-artifact@v4
         with:
