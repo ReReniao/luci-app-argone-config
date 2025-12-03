@@ -9,7 +9,7 @@ on:
 
 jobs:
   compile-armv8:
-    runs-on: ubuntu-20.04  # 固定用 20.04，避免依赖兼容问题
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Plugin Source
         uses: actions/checkout@v4
